@@ -17,6 +17,7 @@ import type {
   RSCRouteManifest,
   RSCRenderPayload,
   CreateFromReadableStreamFunction,
+  CreateTemporaryReferenceSetFunction,
 } from "./server.rsc";
 import type {
   DataStrategyFunction,
@@ -41,7 +42,7 @@ import {
 } from "../dom/ssr/routes";
 import { RSCRouterGlobalErrorBoundary } from "./errorBoundaries";
 
-export type EncodeReplyFunction = (args: unknown[]) => Promise<BodyInit>;
+export type EncodeReplyFunction = (args: unknown[], options?: { temporaryReferences?: unknown }) => Promise<BodyInit>;
 
 declare global {
   interface Window {
@@ -54,10 +55,12 @@ declare global {
 export function createCallServer({
   createFromReadableStream,
   encodeReply,
+  createTemporaryReferenceSet,
   fetch: fetchImplementation = fetch,
 }: {
   createFromReadableStream: CreateFromReadableStreamFunction;
   encodeReply: EncodeReplyFunction;
+  createTemporaryReferenceSet: CreateTemporaryReferenceSetFunction;
   fetch?: (request: Request) => Promise<Response>;
 }) {
   let landedActionId = 0;
@@ -65,9 +68,10 @@ export function createCallServer({
     let actionId = (window.__routerActionID =
       (window.__routerActionID ??= 0) + 1);
 
+    const temporaryReferences = createTemporaryReferenceSet();
     const response = await fetchImplementation(
       new Request(location.href, {
-        body: await encodeReply(args),
+        body: await encodeReply(args, { temporaryReferences }),
         method: "POST",
         headers: {
           Accept: "text/x-component",
@@ -79,7 +83,8 @@ export function createCallServer({
       throw new Error("No response body");
     }
     const payload = (await createFromReadableStream(
-      response.body
+      response.body,
+      { temporaryReferences }
     )) as RSCPayload;
 
     if (payload.type === "redirect") {

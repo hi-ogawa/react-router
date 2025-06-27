@@ -36,8 +36,11 @@ import type { RouteMatch, RouteObject } from "../context";
 import invariant from "../server-runtime/invariant";
 
 export type CreateFromReadableStreamFunction = (
-  body: ReadableStream<Uint8Array>
+  body: ReadableStream<Uint8Array>,
+  options?: { temporaryReferences?: unknown }
 ) => Promise<unknown>;
+
+export type CreateTemporaryReferenceSetFunction = () => unknown;
 
 type ServerContext = {
   redirect?: Response;
@@ -216,7 +219,8 @@ export type DecodeFormStateFunction = (
 ) => unknown;
 
 export type DecodeReplyFunction = (
-  reply: FormData | string
+  reply: FormData | string,
+  options?: { temporaryReferences?: unknown }
 ) => Promise<unknown[]>;
 
 export type LoadServerActionFunction = (id: string) => Promise<Function>;
@@ -226,6 +230,7 @@ export async function matchRSCServerRequest({
   loadServerAction,
   decodeAction,
   decodeFormState,
+  createTemporaryReferenceSet,
   onError,
   request,
   routes,
@@ -235,6 +240,7 @@ export async function matchRSCServerRequest({
   decodeAction?: DecodeActionFunction;
   decodeFormState?: DecodeFormStateFunction;
   loadServerAction?: LoadServerActionFunction;
+  createTemporaryReferenceSet?: CreateTemporaryReferenceSetFunction;
   onError?: (error: unknown) => void;
   request: Request;
   routes: RSCRouteConfigEntry[];
@@ -298,6 +304,7 @@ export async function matchRSCServerRequest({
     loadServerAction,
     decodeAction,
     decodeFormState,
+    createTemporaryReferenceSet,
     onError,
     generateResponse
   );
@@ -361,12 +368,14 @@ async function processServerAction(
   loadServerAction: LoadServerActionFunction | undefined,
   decodeAction: DecodeActionFunction | undefined,
   decodeFormState: DecodeFormStateFunction | undefined,
+  createTemporaryReferenceSet: CreateTemporaryReferenceSetFunction | undefined,
   onError: ((error: unknown) => void) | undefined
 ): Promise<
   | {
       revalidationRequest: Request;
       actionResult?: Promise<unknown>;
       formState?: unknown;
+      temporaryReferences?: unknown;
     }
   | Response
   | undefined
@@ -393,7 +402,8 @@ async function processServerAction(
       ? await request.formData()
       : await request.text();
 
-    const actionArgs = await decodeReply(reply);
+    const temporaryReferences = createTemporaryReferenceSet?.()
+    const actionArgs = await decodeReply(reply, { temporaryReferences });
     const action = await loadServerAction(actionId);
     const serverAction = action.bind(null, ...actionArgs);
 
@@ -410,6 +420,7 @@ async function processServerAction(
     }
     return {
       actionResult,
+      temporaryReferences,
       revalidationRequest: getRevalidationRequest(),
     };
   } else if (isFormRequest) {
@@ -498,6 +509,7 @@ async function generateRenderResponse(
   loadServerAction: LoadServerActionFunction | undefined,
   decodeAction: DecodeActionFunction | undefined,
   decodeFormState: DecodeFormStateFunction | undefined,
+  createTemporaryReferenceSet: CreateTemporaryReferenceSetFunction | undefined,
   onError: ((error: unknown) => void) | undefined,
   generateResponse: (match: RSCMatch) => Response
 ): Promise<Response> {
@@ -524,6 +536,7 @@ async function generateRenderResponse(
   });
 
   let actionResult: Promise<unknown> | undefined;
+  let temporaryReferences: unknown | undefined;
   const ctx: ServerContext = {};
   const result = await ServerStorage.run(ctx, () =>
     handler.query(request, {
@@ -545,6 +558,7 @@ async function generateRenderResponse(
             loadServerAction,
             decodeAction,
             decodeFormState,
+            createTemporaryReferenceSet,
             onError
           );
           if (isResponse(result)) {
@@ -555,6 +569,7 @@ async function generateRenderResponse(
             );
           }
           actionResult = result?.actionResult;
+          temporaryReferences = result?.temporaryReferences;
           formState = result?.formState;
           request = result?.revalidationRequest ?? request;
         }
